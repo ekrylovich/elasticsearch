@@ -13,6 +13,7 @@ import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import com.carrotsearch.randomizedtesting.generators.RandomStrings;
 
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.store.AlreadyClosedException;
@@ -28,6 +29,7 @@ import org.elasticsearch.action.support.replication.TransportReplicationAction;
 import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.NodeConnectionsService;
 import org.elasticsearch.cluster.action.index.MappingUpdatedAction;
 import org.elasticsearch.cluster.coordination.ClusterBootstrapService;
 import org.elasticsearch.cluster.coordination.NoMasterBlockService;
@@ -49,6 +51,7 @@ import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.component.LifecycleListener;
 import org.elasticsearch.common.io.FileSystemUtils;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
+import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.MockSecureSettings;
 import org.elasticsearch.common.settings.SecureSettings;
 import org.elasticsearch.common.settings.Settings;
@@ -152,7 +155,6 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.not;
-import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
@@ -384,9 +386,6 @@ public final class InternalTestCluster extends TestCluster {
         if (Strings.hasLength(System.getProperty("tests.es.logger.level"))) {
             builder.put("logger.level", System.getProperty("tests.es.logger.level"));
         }
-        if (Strings.hasLength(System.getProperty("es.logger.prefix"))) {
-            builder.put("logger.prefix", System.getProperty("es.logger.prefix"));
-        }
         // Default the watermarks to absurdly low to prevent the tests
         // from failing on nodes without enough disk space
         builder.put(DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_LOW_DISK_WATERMARK_SETTING.getKey(), "1b");
@@ -603,6 +602,12 @@ public final class InternalTestCluster extends TestCluster {
             );
         }
 
+        if (random.nextBoolean()) {
+            // Nodes may fail to join a cluster within the default 30s timeout so we must sometimes skip that wait to ensure there's nothing
+            // in the startup process which relies on having joined a cluster.
+            builder.put(INITIAL_STATE_TIMEOUT_SETTING.getKey(), "0s");
+        }
+
         return builder.build();
     }
 
@@ -730,14 +735,6 @@ public final class InternalTestCluster extends TestCluster {
         // force certain settings
         updatedSettings.put("node.name", name);
         updatedSettings.put(NodeEnvironment.NODE_ID_SEED_SETTING.getKey(), seed);
-
-        if (autoManageMasterNodes) {
-            assertThat(
-                "if master nodes are automatically managed then nodes must complete a join cycle when starting",
-                updatedSettings.get(INITIAL_STATE_TIMEOUT_SETTING.getKey()),
-                nullValue()
-            );
-        }
 
         return updatedSettings.build();
     }
@@ -901,10 +898,16 @@ public final class InternalTestCluster extends TestCluster {
                 activeDisruptionScheme.testClusterClosed();
                 activeDisruptionScheme = null;
             }
+            // There is a WARN level log in NodeConnectionsService which logs when a node connection attempt fails. As we stop nodes one by
+            // one, this logs a bunch of noise. Temporarily raise the log level to ERROR while stopping cluster.
+            Logger nodeConnectionLogger = LogManager.getLogger(NodeConnectionsService.class);
+            Level initialLogLevel = nodeConnectionLogger.getLevel();
+            Loggers.setLevel(nodeConnectionLogger, Level.ERROR);
             try {
                 IOUtils.close(nodes.values());
             } finally {
                 nodes = Collections.emptyNavigableMap();
+                Loggers.setLevel(nodeConnectionLogger, initialLogLevel);
                 executor.shutdownNow();
             }
         }
@@ -1306,17 +1309,7 @@ public final class InternalTestCluster extends TestCluster {
                 IndicesService indexServices = getInstance(IndicesService.class, nodeAndClient.name);
                 for (IndexService indexService : indexServices) {
                     for (IndexShard indexShard : indexService) {
-                        List<String> operations = indexShard.getActiveOperations();
-                        if (operations.size() > 0) {
-                            throw new AssertionError(
-                                "shard "
-                                    + indexShard.shardId()
-                                    + " on node ["
-                                    + nodeAndClient.name
-                                    + "] has pending operations:\n --> "
-                                    + String.join("\n --> ", operations)
-                            );
-                        }
+                        assertEquals(0, indexShard.getActiveOperationsCount());
                     }
                 }
             }
@@ -1776,6 +1769,10 @@ public final class InternalTestCluster extends TestCluster {
                 throw new AssertionError("failed to configure file-based discovery", e);
             }
         }
+    }
+
+    public Collection<Path> configPaths() {
+        return nodes.values().stream().map(nac -> nac.node.getEnvironment().configFile()).toList();
     }
 
     private void stopNodesAndClient(NodeAndClient nodeAndClient) throws IOException {
@@ -2452,6 +2449,7 @@ public final class InternalTestCluster extends TestCluster {
                     false,
                     false,
                     false,
+                    false,
                     false
                 );
                 assertThat(
@@ -2515,9 +2513,9 @@ public final class InternalTestCluster extends TestCluster {
                                 "All incoming requests on node ["
                                     + nodeAndClient.name
                                     + "] should have finished. "
-                                    + "Expected 0 but got "
+                                    + "Expected 0 bytes for requests in-flight but got "
                                     + bytesUsed
-                                    + "; pending tasks ["
+                                    + " bytes; pending tasks ["
                                     + pendingTasks
                                     + "]"
                             );

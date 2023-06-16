@@ -9,6 +9,7 @@
 package org.elasticsearch.cluster.metadata;
 
 import org.elasticsearch.ResourceNotFoundException;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.admin.indices.alias.get.GetAliasesRequest;
 import org.elasticsearch.cluster.ClusterModule;
@@ -28,12 +29,14 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.SuppressForbidden;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.alias.RandomAliasActionsGenerator;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.plugins.MapperPlugin;
+import org.elasticsearch.test.AbstractChunkedSerializingTestCase;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.VersionUtils;
 import org.elasticsearch.xcontent.ToXContent;
@@ -42,6 +45,7 @@ import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.json.JsonXContent;
 
 import java.io.IOException;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -168,7 +172,7 @@ public class MetadataTests extends ESTestCase {
         List<Index> allIndices = new ArrayList<>(result.indices);
         allIndices.addAll(result.backingIndices);
         String[] concreteIndices = allIndices.stream().map(Index::getName).toList().toArray(new String[] {});
-        Map<String, IndexAbstraction.DataStream> dataStreams = result.metadata.findDataStreams(concreteIndices);
+        Map<String, DataStream> dataStreams = result.metadata.findDataStreams(concreteIndices);
         assertThat(dataStreams.size(), equalTo(numBackingIndices));
         for (Index backingIndex : result.backingIndices) {
             assertThat(dataStreams.containsKey(backingIndex.getName()), is(true));
@@ -616,26 +620,8 @@ public class MetadataTests extends ESTestCase {
 
     public void testFindMappings() throws IOException {
         Metadata metadata = Metadata.builder()
-            .put(
-                IndexMetadata.builder("index1")
-                    .settings(
-                        Settings.builder()
-                            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                    )
-                    .putMapping(FIND_MAPPINGS_TEST_ITEM)
-            )
-            .put(
-                IndexMetadata.builder("index2")
-                    .settings(
-                        Settings.builder()
-                            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                    )
-                    .putMapping(FIND_MAPPINGS_TEST_ITEM)
-            )
+            .put(IndexMetadata.builder("index1").settings(indexSettings(Version.CURRENT, 1, 0)).putMapping(FIND_MAPPINGS_TEST_ITEM))
+            .put(IndexMetadata.builder("index2").settings(indexSettings(Version.CURRENT, 1, 0)).putMapping(FIND_MAPPINGS_TEST_ITEM))
             .build();
 
         {
@@ -680,16 +666,7 @@ public class MetadataTests extends ESTestCase {
         );
 
         Metadata metadata = Metadata.builder()
-            .put(
-                IndexMetadata.builder("index1")
-                    .settings(
-                        Settings.builder()
-                            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                    )
-                    .putMapping(originalMappingMetadata)
-            )
+            .put(IndexMetadata.builder("index1").settings(indexSettings(Version.CURRENT, 1, 0)).putMapping(originalMappingMetadata))
             .build();
 
         {
@@ -725,36 +702,9 @@ public class MetadataTests extends ESTestCase {
         }
 
         Metadata metadata = Metadata.builder()
-            .put(
-                IndexMetadata.builder("index1")
-                    .settings(
-                        Settings.builder()
-                            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                    )
-                    .putMapping(mapping)
-            )
-            .put(
-                IndexMetadata.builder("index2")
-                    .settings(
-                        Settings.builder()
-                            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                    )
-                    .putMapping(mapping)
-            )
-            .put(
-                IndexMetadata.builder("index3")
-                    .settings(
-                        Settings.builder()
-                            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                    )
-                    .putMapping(mapping)
-            )
+            .put(IndexMetadata.builder("index1").settings(indexSettings(Version.CURRENT, 1, 0)).putMapping(mapping))
+            .put(IndexMetadata.builder("index2").settings(indexSettings(Version.CURRENT, 1, 0)).putMapping(mapping))
+            .put(IndexMetadata.builder("index3").settings(indexSettings(Version.CURRENT, 1, 0)).putMapping(mapping))
             .build();
 
         {
@@ -1265,14 +1215,7 @@ public class MetadataTests extends ESTestCase {
 
         b = Metadata.builder();
         b.put(
-            IndexMetadata.builder("index1")
-                .settings(
-                    Settings.builder()
-                        .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                        .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                        .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                )
-                .putAlias(new AliasMetadata.Builder("my-alias"))
+            IndexMetadata.builder("index1").settings(indexSettings(Version.CURRENT, 1, 0)).putAlias(new AliasMetadata.Builder("my-alias"))
         );
 
         addDataStream("d1", b);
@@ -1300,14 +1243,7 @@ public class MetadataTests extends ESTestCase {
 
         b = Metadata.builder();
         b.put(
-            IndexMetadata.builder("index1")
-                .settings(
-                    Settings.builder()
-                        .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-                        .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-                        .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-                )
-                .putAlias(new AliasMetadata.Builder("my-alias"))
+            IndexMetadata.builder("index1").settings(indexSettings(Version.CURRENT, 1, 0)).putAlias(new AliasMetadata.Builder("my-alias"))
         );
         b.dataStreams(Map.of("d1", createDataStream("d1")), Map.of("my-alias", new DataStreamAlias("my-alias", List.of("d1"), null, null)));
         e = expectThrows(IllegalStateException.class, b::build);
@@ -2271,6 +2207,97 @@ public class MetadataTests extends ESTestCase {
         assertSame(instance, deserializedDiff.apply(instance));
     }
 
+    public void testChunkedToXContent() throws IOException {
+        final int datastreams = randomInt(10);
+        // 2 chunks at the beginning
+        // 1 chunk for each index + 2 to wrap the indices field
+        // 2 chunks for wrapping reserved state + 1 chunk for each item
+        // 2 chunks wrapping templates and one chunk per template
+        // 2 chunks to wrap each custom
+        // 1 chunk per datastream, 4 chunks to wrap ds and ds-aliases, or 0 if there are no datastreams
+        // 2 chunks to wrap index graveyard and one per tombstone
+        // 2 chunks to wrap component templates and one per component template
+        // 2 chunks to wrap v2 templates and one per v2 template
+        // 1 chunk to close metadata
+        AbstractChunkedSerializingTestCase.assertChunkCount(randomMetadata(datastreams), instance -> {
+            // 2 chunks at the beginning
+            // 1 chunk for each index + 2 to wrap the indices field
+            final int indicesChunks = instance.indices().size() + 2;
+            // 2 chunks for wrapping reserved state + 1 chunk for each item
+            final int reservedStateChunks = instance.reservedStateMetadata().size() + 2;
+            // 2 chunks wrapping templates and one chunk per template
+            final int templatesChunks = instance.templates().size() + 2;
+            // 2 chunks to wrap each custom
+            final int customChunks = 2 * instance.customs().size();
+            // 1 chunk per datastream, 4 chunks to wrap ds and ds-aliases, or 0 if there are no datastreams
+            final int dsChunks = datastreams == 0 ? 0 : (datastreams + 4);
+            // 2 chunks to wrap index graveyard and one per tombstone
+            final int graveYardChunks = instance.indexGraveyard().getTombstones().size() + 2;
+            // 2 chunks to wrap component templates and one per component template
+            final int componentTemplateChunks = instance.componentTemplates().size() + 2;
+            // 2 chunks to wrap v2 templates and one per v2 template
+            final int v2TemplateChunks = instance.templatesV2().size() + 2;
+            // 1 chunk to close metadata
+
+            return 2 + indicesChunks + reservedStateChunks + templatesChunks + customChunks + dsChunks + graveYardChunks
+                + componentTemplateChunks + v2TemplateChunks + 1;
+        });
+    }
+
+    /**
+     * With this test we ensure that we consider whether a new field added to Metadata should be checked
+     * in Metadata.isGlobalStateEquals. We force the instance fields to be either in the checked list
+     * or in the excluded list.
+     * <p>
+     * This prevents from accidentally forgetting that a new field should be checked in isGlobalStateEquals.
+     */
+    @SuppressForbidden(reason = "need access to all fields, they are mostly private")
+    public void testEnsureMetadataFieldCheckedForGlobalStateChanges() {
+        Set<String> checkedForGlobalStateChanges = Set.of(
+            "coordinationMetadata",
+            "persistentSettings",
+            "hashesOfConsistentSettings",
+            "templates",
+            "clusterUUID",
+            "clusterUUIDCommitted",
+            "customs",
+            "reservedStateMetadata"
+        );
+        Set<String> excludedFromGlobalStateCheck = Set.of(
+            "version",
+            "transientSettings",
+            "settings",
+            "indices",
+            "aliasedIndices",
+            "totalNumberOfShards",
+            "totalOpenIndexShards",
+            "allIndices",
+            "visibleIndices",
+            "allOpenIndices",
+            "visibleOpenIndices",
+            "allClosedIndices",
+            "visibleClosedIndices",
+            "indicesLookup",
+            "mappingsByHash",
+            "oldestIndexVersion"
+        );
+
+        var diff = new HashSet<>(checkedForGlobalStateChanges);
+        diff.removeAll(excludedFromGlobalStateCheck);
+
+        // sanity check that the two field sets are mutually exclusive
+        assertEquals(checkedForGlobalStateChanges, diff);
+
+        // any declared non-static field in metadata must be either in the list of fields
+        // we check for global state changes, or in the fields excluded from the global state check.
+        var unclassifiedFields = Arrays.stream(Metadata.class.getDeclaredFields())
+            .filter(f -> Modifier.isStatic(f.getModifiers()) == false)
+            .map(f -> f.getName())
+            .filter(n -> (checkedForGlobalStateChanges.contains(n) || excludedFromGlobalStateCheck.contains(n)) == false)
+            .collect(Collectors.toSet());
+        assertThat(unclassifiedFields, empty());
+    }
+
     public static Metadata randomMetadata() {
         return randomMetadata(1);
     }
@@ -2372,7 +2399,7 @@ public class MetadataTests extends ESTestCase {
         }
 
         @Override
-        public Version getMinimalSupportedVersion() {
+        public TransportVersion getMinimalSupportedVersion() {
             return null;
         }
 

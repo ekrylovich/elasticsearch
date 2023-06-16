@@ -4,7 +4,7 @@
       "url":"https://www.elastic.co/guide/en/elasticsearch/reference/master/start-trained-model-deployment.html",
       "description":"Start a trained model deployment."
     },
-    "stability":"beta",
+    "stability":"stable",
     "visibility":"public",
     "headers":{
       "accept": [ "application/json"],
@@ -31,6 +31,11 @@
       "cache_size": {
         "type": "string",
         "description": "A byte-size value for configuring the inference cache size. For example, 20mb.",
+        "required": false
+      },
+      "deployment_id":{
+        "type":"string",
+        "description": "The Id of the new deployment. Defaults to the model_id if not set.",
         "required": false
       },
       "number_of_allocations":{

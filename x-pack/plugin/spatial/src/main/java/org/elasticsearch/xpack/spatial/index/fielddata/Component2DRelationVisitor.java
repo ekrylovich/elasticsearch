@@ -10,6 +10,11 @@ package org.elasticsearch.xpack.spatial.index.fielddata;
 import org.apache.lucene.geo.Component2D;
 import org.apache.lucene.index.PointValues;
 
+import static org.elasticsearch.xpack.spatial.index.fielddata.TriangleTreeVisitor.TriangleTreeDecodedVisitor;
+import static org.elasticsearch.xpack.spatial.index.fielddata.TriangleTreeVisitor.abFromTriangle;
+import static org.elasticsearch.xpack.spatial.index.fielddata.TriangleTreeVisitor.bcFromTriangle;
+import static org.elasticsearch.xpack.spatial.index.fielddata.TriangleTreeVisitor.caFromTriangle;
+
 /**
  * A reusable tree reader visitor for a previous serialized {@link org.elasticsearch.geometry.Geometry} using
  * {@link TriangleTreeWriter}.
@@ -17,7 +22,7 @@ import org.apache.lucene.index.PointValues;
  * This class supports checking {@link Component2D} relations against a serialized triangle tree.
  * It does not support bounding boxes crossing the dateline.
  */
-class Component2DRelationVisitor extends TriangleTreeReader.DecodedVisitor {
+class Component2DRelationVisitor extends TriangleTreeDecodedVisitor {
 
     private GeoRelation relation;
     private Component2D component2D;
@@ -39,12 +44,12 @@ class Component2DRelationVisitor extends TriangleTreeReader.DecodedVisitor {
     }
 
     @Override
-    void visitDecodedPoint(double x, double y) {
+    protected void visitDecodedPoint(double x, double y) {
         if (component2D.contains(x, y)) {
-            if (canBeContained()) {
-                relation = GeoRelation.QUERY_CONTAINS;
-            } else if (component2D.withinPoint(x, y) == Component2D.WithinRelation.CANDIDATE) {
+            if (canBeInside() && component2D.withinPoint(x, y) == Component2D.WithinRelation.CANDIDATE) {
                 relation = GeoRelation.QUERY_INSIDE;
+            } else if (canBeContained()) {
+                relation = GeoRelation.QUERY_CONTAINS;
             } else {
                 relation = GeoRelation.QUERY_CROSSES;
             }
@@ -54,13 +59,13 @@ class Component2DRelationVisitor extends TriangleTreeReader.DecodedVisitor {
     }
 
     @Override
-    void visitDecodedLine(double aX, double aY, double bX, double bY, byte metadata) {
+    protected void visitDecodedLine(double aX, double aY, double bX, double bY, byte metadata) {
         if (component2D.intersectsLine(aX, aY, bX, bY)) {
-            final boolean ab = (metadata & 1 << 4) == 1 << 4;
-            if (canBeContained() && component2D.containsLine(aX, aY, bX, bY)) {
-                relation = GeoRelation.QUERY_CONTAINS;
-            } else if (canBeInside() && component2D.withinLine(aX, aY, ab, bX, bY) == Component2D.WithinRelation.CANDIDATE) {
+            final boolean ab = abFromTriangle(metadata);
+            if (canBeInside() && component2D.withinLine(aX, aY, ab, bX, bY) == Component2D.WithinRelation.CANDIDATE) {
                 relation = GeoRelation.QUERY_INSIDE;
+            } else if (canBeContained() && component2D.containsLine(aX, aY, bX, bY)) {
+                relation = GeoRelation.QUERY_CONTAINS;
             } else {
                 relation = GeoRelation.QUERY_CROSSES;
             }
@@ -70,19 +75,18 @@ class Component2DRelationVisitor extends TriangleTreeReader.DecodedVisitor {
     }
 
     @Override
-    void visitDecodedTriangle(double aX, double aY, double bX, double bY, double cX, double cY, byte metadata) {
+    protected void visitDecodedTriangle(double aX, double aY, double bX, double bY, double cX, double cY, byte metadata) {
         if (component2D.intersectsTriangle(aX, aY, bX, bY, cX, cY)) {
-            final boolean ab = (metadata & 1 << 4) == 1 << 4;
-            final boolean bc = (metadata & 1 << 5) == 1 << 5;
-            final boolean ca = (metadata & 1 << 6) == 1 << 6;
-            if (canBeContained() && component2D.containsTriangle(aX, aY, bX, bY, cX, cY)) {
+            final boolean ab = abFromTriangle(metadata);
+            final boolean bc = bcFromTriangle(metadata);
+            final boolean ca = caFromTriangle(metadata);
+            if (canBeInside() && component2D.withinTriangle(aX, aY, ab, bX, bY, bc, cX, cY, ca) == Component2D.WithinRelation.CANDIDATE) {
+                relation = GeoRelation.QUERY_INSIDE;
+            } else if (canBeContained() && component2D.containsTriangle(aX, aY, bX, bY, cX, cY)) {
                 relation = GeoRelation.QUERY_CONTAINS;
-            } else if (canBeInside()
-                && component2D.withinTriangle(aX, aY, ab, bX, bY, bc, cX, cY, ca) == Component2D.WithinRelation.CANDIDATE) {
-                    relation = GeoRelation.QUERY_INSIDE;
-                } else {
-                    relation = GeoRelation.QUERY_CROSSES;
-                }
+            } else {
+                relation = GeoRelation.QUERY_CROSSES;
+            }
         } else {
             adjustRelationForNotIntersectingComponent();
         }

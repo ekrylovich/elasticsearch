@@ -78,8 +78,8 @@ public class Optimizer extends RuleExecutor<LogicalPlan> {
     }
 
     @Override
-    protected Iterable<RuleExecutor<LogicalPlan>.Batch> batches() {
-        Batch substitutions = new Batch(
+    protected Iterable<RuleExecutor.Batch<LogicalPlan>> batches() {
+        var substitutions = new Batch<>(
             "Substitution",
             Limiter.ONCE,
             new ReplaceWildcards(),
@@ -89,7 +89,7 @@ public class Optimizer extends RuleExecutor<LogicalPlan> {
             new AddMandatoryJoinKeyFilter()
         );
 
-        Batch operators = new Batch(
+        var operators = new Batch<>(
             "Operator Optimization",
             new ConstantFolding(),
             // boolean
@@ -107,13 +107,13 @@ public class Optimizer extends RuleExecutor<LogicalPlan> {
             new PushDownAndCombineFilters()
         );
 
-        Batch constraints = new Batch("Infer constraints", Limiter.ONCE, new PropagateJoinKeyConstraints());
+        var constraints = new Batch<>("Infer constraints", Limiter.ONCE, new PropagateJoinKeyConstraints());
 
-        Batch ordering = new Batch("Implicit Order", new SortByLimit(), new PushDownOrderBy());
+        var ordering = new Batch<>("Implicit Order", new SortByLimit(), new PushDownOrderBy());
 
-        Batch local = new Batch("Skip Elasticsearch", new SkipEmptyFilter(), new SkipEmptyJoin(), new SkipQueryOnLimitZero());
+        var local = new Batch<>("Skip Elasticsearch", new SkipEmptyFilter(), new SkipEmptyJoin(), new SkipQueryOnLimitZero());
 
-        Batch label = new Batch("Set as Optimized", Limiter.ONCE, new SetAsOptimized());
+        var label = new Batch<>("Set as Optimized", Limiter.ONCE, new SetAsOptimized());
 
         return asList(substitutions, operators, constraints, operators, ordering, local, label);
     }
@@ -222,7 +222,10 @@ public class Optimizer extends RuleExecutor<LogicalPlan> {
                         mandatoryKeys.stream().map(m -> new IsNotNull(m.source(), m)).collect(toList())
                     );
                     Filter joinKeyNotNull = new Filter(join.source(), k.child(), constraint);
-                    filters.set(i, new KeyedFilter(k.source(), joinKeyNotNull, k.keys(), k.timestamp(), k.tiebreaker()));
+                    filters.set(
+                        i,
+                        new KeyedFilter(k.source(), joinKeyNotNull, k.keys(), k.timestamp(), k.tiebreaker(), k.isMissingEventFilter())
+                    );
                 }
             }
             if (changed) {
@@ -433,7 +436,14 @@ public class Optimizer extends RuleExecutor<LogicalPlan> {
             );
 
             return constraint != null
-                ? new KeyedFilter(k.source(), new Filter(k.source(), k.child(), constraint), k.keys(), k.timestamp(), k.tiebreaker())
+                ? new KeyedFilter(
+                    k.source(),
+                    new Filter(k.source(), k.child(), constraint),
+                    k.keys(),
+                    k.timestamp(),
+                    k.tiebreaker(),
+                    k.isMissingEventFilter()
+                )
                 : k;
         }
     }
@@ -489,10 +499,12 @@ public class Optimizer extends RuleExecutor<LogicalPlan> {
                     boolean baseFilter = true;
                     for (KeyedFilter filter : queries) {
                         // preserve the order for the base query, everything else needs to be ascending
-                        List<Order> pushedOrder = baseFilter ? orderBy.order() : ascendingOrders;
+                        List<Order> pushedOrder = baseFilter && filter.isMissingEventFilter() == false ? orderBy.order() : ascendingOrders;
                         OrderBy order = new OrderBy(filter.source(), filter.child(), pushedOrder);
                         orderedQueries.add(filter.replaceChild(order));
-                        baseFilter = false;
+                        if (filter.isMissingEventFilter() == false) {
+                            baseFilter = false;
+                        }
                     }
 
                     KeyedFilter until = join.until();

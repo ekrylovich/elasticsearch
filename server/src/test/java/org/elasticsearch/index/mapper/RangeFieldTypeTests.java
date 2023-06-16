@@ -141,6 +141,7 @@ public class RangeFieldTypeTests extends FieldTypeTestCase {
     /**
      * check that we catch cases where the user specifies larger "from" than "to" value, not counting the include upper/lower settings
      */
+    @AwaitsFix(bugUrl = "https://github.com/elastic/elasticsearch/issues/86284")
     public void testFromLargerToErrors() throws Exception {
         SearchExecutionContext context = createContext();
         RangeFieldType ft = createDefaultFieldType();
@@ -209,7 +210,7 @@ public class RangeFieldTypeTests extends FieldTypeTestCase {
             null,
             null,
             null,
-            null,
+            MappingLookup.EMPTY,
             null,
             null,
             parserConfig(),
